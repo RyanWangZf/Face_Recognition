@@ -43,10 +43,23 @@ def get_model_filenames(model_dir):
 def build_model(emb,scope="new_layers"):
     with tf.variable_scope(scope):
         h = tf.layers.dense(inputs=emb,
-            units=2,
+            units= 256,
+            kernel_initializer=tf.truncated_normal_initializer(stddev=0.01),
+            activation=tf.nn.relu,
+            trainable=True)
+        
+        h = tf.layers.dense(inputs=h,
+            units= 64,
+            kernel_initializer=tf.truncated_normal_initializer(stddev=0.01),
+            activation=tf.nn.relu,
+            trainable=True)
+
+        h = tf.layers.dense(inputs=h,
+            units= 2,
             kernel_initializer=tf.truncated_normal_initializer(stddev=0.01),
             activation=None,
             trainable=True)
+
         y = tf.nn.softmax(h,name="output_predict")
 
     return y
@@ -146,12 +159,12 @@ def main(args=None):
             phase_train_placeholder:True} # update batchnorm's moving averages
         _,b_loss = sess.run([train_op,loss],feed_dict=feed_dict)
         if i % 10 == 0:
-            y_test_pred = sess.run(y,feed_dict={images_placeholder:x_test,phase_train_placeholder:True})
+            y_test_pred = sess.run(y,feed_dict={images_placeholder:x_test,phase_train_placeholder:False})
             acc_ = (np.argmax(y_test_pred,1) == np.argmax(y_test,1)).sum() / y_test.shape[0]
             print("epoch: {} loss: {} test auc: {}, acc: {}".format(i,b_loss,metrics.roc_auc_score(y_test,y_test_pred),acc_))
         if i % 100 == 0:
             save_sign_model(sess,save_model_dir=args.model_save_dir,
-                inputs= images_placeholder,
+                inputs= [images_placeholder,phase_train_placeholder],
                 outputs= y,
                 graph_tags="sex_cls_model")
             print("epoch {}, save model in {}.".format(i,args.model_save_dir))
@@ -160,16 +173,17 @@ def main(args=None):
 
 def save_sign_model(sess,save_model_dir,inputs,outputs,graph_tags="sex_cls_model"):
     "refer to: https://blog.csdn.net/thriving_fcl/article/details/75213361"
-    x = inputs
+    x,phase_train= inputs[0],inputs[1]
     y = outputs
-
+    signature_key = "signature"
     if os.path.exists(save_model_dir):
         shutil.rmtree(save_model_dir)
 
     builder = tf.saved_model.builder.SavedModelBuilder(save_model_dir)
 
     # x is input tensor
-    inputs = {"input_x":tf.saved_model.utils.build_tensor_info(x)}
+    inputs = {"input_x":tf.saved_model.utils.build_tensor_info(x),
+    "phase_train":tf.saved_model.utils.build_tensor_info(phase_train)}
 
     # y is output tensor
     outputs = {"output": tf.saved_model.utils.build_tensor_info(y)}
@@ -182,7 +196,7 @@ def save_sign_model(sess,save_model_dir,inputs,outputs,graph_tags="sex_cls_model
 
     builder.add_meta_graph_and_variables(sess,
         tags=[graph_tags],
-        signature_def_map = {"signature":signature},
+        signature_def_map = {signature_key:signature},
         )
 
     builder.save()

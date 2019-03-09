@@ -18,10 +18,49 @@ import dlib
 
 import pdb
 
+class facesex_cls(object):
+    def __init__(self,save_model_dir):
+        self.graph = tf.Graph() # construct a graph for this network
+        self.sess = tf.Session(graph=self.graph) # create new session
+        with self.graph.as_default():
+            # load model
+            self.x,self.y,self.phase_train = self.load_sign_model(self.sess,save_model_dir)
+
+    def predict(self,face):
+        face = np.expand_dims(face,axis=0) / 255.
+        # pdb.set_trace()
+        label = self.sess.run(self.y,feed_dict={self.x:face,self.phase_train:False})
+        return np.argmax(label,1)[0]
+
+    def load_sign_model(self,sess,save_model_dir):
+        input_key = "input_x"
+        phase_train_key = "phase_train"
+        output_key="output"
+        signature_key = "signature"
+        meta_graph_def = tf.saved_model.loader.load(sess,
+            tags=["sex_cls_model"],
+            export_dir=save_model_dir,
+            )
+        # obtain SignatureDef object from meta_graph_def
+        signature = meta_graph_def.signature_def
+
+        phase_train_name = signature[signature_key].inputs[phase_train_key].name
+        x_tensor_name = signature[signature_key].inputs[input_key].name
+        y_tensor_name = signature[signature_key].outputs[output_key].name
+
+        # obtain tensor and inference
+        phase_train = sess.graph.get_tensor_by_name(phase_train_name)
+        x = sess.graph.get_tensor_by_name(x_tensor_name)
+        y = sess.graph.get_tensor_by_name(y_tensor_name)
+
+        return x,y,phase_train
+
+
 def main(args):
     print('Creating networks and loading parameters') 
     # if GPU memory is not enough, force it using CPU for computing
     os.environ["CUDA_VISIBLE_DEVICES"] = ""
+    sex_cls = facesex_cls(save_model_dir="model/sex_cls")
 
     with tf.Graph().as_default():
         gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=args.gpu_memory_fraction)
@@ -80,8 +119,7 @@ def main(args):
             rgb_img = cv2.cvtColor(frame,cv2.COLOR_BGR2RGB)
             
             for i,face_box in enumerate(det_arr):
-                # add overlays
-                add_overlays(frame,face_box,frame_rate,nrof_faces=len(det_arr))
+
                 
                 # save aligned face image
                 det = dlib.rectangle(*face_box.astype(int))
@@ -89,36 +127,51 @@ def main(args):
                 face = sp(gray_frame,det)
                 landmarks = np.matrix([[p.x,p.y] for p in face.parts()])
 
+                
+                # save and detect aligned images
+                face = dlib.get_face_chip(rgb_img,face,size=160)
+
+                # do face sex classification
+                sex_label = sex_cls.predict(face)
+
+                # face = cv2.cvtColor(face,cv2.COLOR_RGB2BGR)
+                # cv2.imwrite("face_img_aligned/%d_img.png"%nrof_aligned_face,face)
+
+                # add overlays
+                add_overlays(frame,face_box,sex_label)
+
                 # put circles on points
                 for idx,point in enumerate(landmarks):
                     pos = (point[0,0],point[0,1])
                     cv2.circle(frame,pos,4,color=(255,0,255))
                     cv2.putText(frame,str(idx + 1), pos,cv2.FONT_HERSHEY_SIMPLEX,0.4, 
                         (0, 255, 255),1, cv2.LINE_AA) 
-                
-                # save aligned images
-                face = dlib.get_face_chip(rgb_img,face,size=160)
-                face = cv2.cvtColor(face,cv2.COLOR_RGB2BGR)
-                cv2.imwrite("face_img_aligned/%d_img.png"%nrof_aligned_face,face)
-               
+
+                # other put Texts
+                cv2.putText(frame,"num of faces:"+str(len(det_arr)),(10,60),
+                    cv2.FONT_HERSHEY_SIMPLEX,1,(0,0,255),thickness=2,lineType=2)
+                cv2.putText(frame,str(frame_rate)+"fps",(10,30),
+                    cv2.FONT_HERSHEY_SIMPLEX,1,(0,0,255),thickness=2,lineType=2)
+
         frame_count += 1
         cv2.imshow("Video",frame)
         
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
             
-def add_overlays(img,face_box,frame_rate,nrof_faces): 
+def add_overlays(img,face_box,sex_label): 
     face_box = face_box.astype(int)
-    cv2.rectangle(img,(face_box[0],face_box[1]),(face_box[2],face_box[3]),(0,255,0),2)
+    print("sex_label:",sex_label)
+    if sex_label == 0:
+        cv2.putText(img,"male",(face_box[0],face_box[3]),
+                cv2.FONT_HERSHEY_SIMPLEX,0.5,(0,255,0),thickness=1,lineType=2)
+        cv2.rectangle(img,(face_box[0],face_box[1]),(face_box[2],face_box[3]),(0,97,255),2)
+
+    else:
+        cv2.putText(img,"female",(face_box[0],face_box[3]),
+                cv2.FONT_HERSHEY_SIMPLEX,0.5,(0,255,0),thickness=1,lineType=2)
+        cv2.rectangle(img,(face_box[0],face_box[1]),(face_box[2],face_box[3]),(255,0,195),2)
     
-    cv2.putText(img,"face",(face_box[0],face_box[3]),
-                cv2.FONT_HERSHEY_SIMPLEX,0.5,(0,255,0),thickness=2,lineType=2)
-    
-    cv2.putText(img,str(frame_rate)+"fps",(10,30),
-                cv2.FONT_HERSHEY_SIMPLEX,1,(0,0,255),thickness=2,lineType=2)
-    
-    cv2.putText(img,"num of faces:"+str(nrof_faces),(10,60),
-                cv2.FONT_HERSHEY_SIMPLEX,1,(0,0,255),thickness=2,lineType=2)
 
 def face_recognition(img,minsize,pnet,rnet,onet,threshold,factor,args):
     
@@ -155,7 +208,7 @@ def face_recognition(img,minsize,pnet,rnet,onet,threshold,factor,args):
     else:
         print('Unable to find face.')
         return None,None,False
-    
+
 def parse_arguments(argv):
     parser = argparse.ArgumentParser()
     parser.add_argument("input_video",type=str,help="Raw video file.")
