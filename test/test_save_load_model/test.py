@@ -1,12 +1,14 @@
 # -*- coding: utf-8 -*-
 import tensorflow as tf
 import os
+import shutil
+import pdb
 from tensorflow.python.framework import graph_util
 
 
 # --------------------------------------------------------
 def test_pb_save_and_load():
-	pb_file_path = "model"
+	pb_file_path = "model/pb_model"
 	# build graph
 	with tf.Session() as sess:
 		x = tf.placeholder(tf.int32,name="x")
@@ -31,6 +33,8 @@ def save_pb_model(sess,pb_file_path):
 	# constant_graph = graph_util.convert_variables_to_constants(sess, sess.graph_def, ["output"])
 	# with tf.gfile.FastGFile(os.path.join(pb_file_path,"model.pb"),mode="wb") as f:
 	# 	f.write(constant_graph.SerializeToString())
+	if os.path.exists(pb_file_path):
+		shutil.rmtree(pb_file_path)
 
 	builder = tf.saved_model.builder.SavedModelBuilder(os.path.join(pb_file_path,"pb_model"))
 	builder.add_meta_graph_and_variables(sess,tags=["test_model"])
@@ -78,6 +82,9 @@ def test_signature_save_and_load():
 def save_sign_model(sess,save_model_dir,inputs,outputs):
 	x = inputs
 	y = outputs
+	if os.path.exists(save_model_dir):
+		shutil.rmtree(save_model_dir)
+
 	builder = tf.saved_model.builder.SavedModelBuilder(save_model_dir)
 	# x is input tensor, keep_prob is prob of dropout
 	inputs = {"input_x":tf.saved_model.utils.build_tensor_info(x)}
@@ -122,7 +129,6 @@ def load_sign_model(sess,save_model_dir):
 
 def main():
 	test_pb_save_and_load()
-
 	test_signature_save_and_load()
 
 
