@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import tensorflow as tf
+import shutil
 import os
 import pdb
 import re
@@ -12,6 +13,8 @@ import sys
 from keras.preprocessing.image import ImageDataGenerator
 from keras.objectives import binary_crossentropy
 from sklearn import metrics
+from tensorflow.python.framework import graph_util
+
 
 def get_model_filenames(model_dir):
     files = os.listdir(model_dir)
@@ -37,14 +40,14 @@ def get_model_filenames(model_dir):
                 ckpt_file = step_str.groups()[0]
     return meta_file, ckpt_file
 
-def build_model(emb,scope="new_layer"):
+def build_model(emb,scope="new_layers"):
     with tf.variable_scope(scope):
         h = tf.layers.dense(inputs=emb,
             units=2,
             kernel_initializer=tf.truncated_normal_initializer(stddev=0.01),
             activation=None,
             trainable=True)
-        y = tf.nn.softmax(h)
+        y = tf.nn.softmax(h,name="output_predict")
 
     return y
 
@@ -63,21 +66,30 @@ def parse_arguments(argv):
     parser.add_argument("--batch_size",type=int,
         default=64,
         help="num of batches per training.")
+    parser.add_argument("--model_save_dir",type=str,
+        default="model/sex_cls",
+        help="dir of saved trained classifier model.")
 
     return parser.parse_args(argv)
 
 def main(args=None):
+    "Param define"
     # force using CPU
     os.environ["CUDA_VISIBLE_DEVICES"] = ""
     input_image_size = 160
+    new_network_scope = "new_layers"
+    # # used for saving signature graph
+    # output_node_name = new_network_scope + "/output_predict" 
+
     # build graph
     tf.Graph().as_default()
     sess = tf.Session()
+
     # load model
-    model_path = os.path.join(os.getcwd(),args.emb_model_dir)
-    meta_file,ckpt_file = get_model_filenames(model_path)
-    saver = tf.train.import_meta_graph(os.path.join(model_path,meta_file))
-    saver.restore(sess,os.path.join(model_path,ckpt_file))
+    emb_model_path = os.path.join(os.getcwd(),args.emb_model_dir)
+    meta_file,ckpt_file = get_model_filenames(emb_model_path)
+    saver = tf.train.import_meta_graph(os.path.join(emb_model_path,meta_file))
+    saver.restore(sess,os.path.join(emb_model_path,ckpt_file))
 
     # Get input and output tensors
     embeddings = tf.get_default_graph().get_tensor_by_name("embeddings:0")
@@ -95,12 +107,12 @@ def main(args=None):
 	    horizontal_flip=True)
     test_datagen = ImageDataGenerator(rescale=1./255)
 
-    batch_size = args.batch_size
     train_gen = train_datagen.flow_from_directory(
         os.path.join(os.getcwd(),args.train_dir),
     	target_size=(input_image_size,input_image_size),
-    	batch_size=batch_size,
+    	batch_size=args.batch_size,
     	class_mode="categorical")
+
     test_gen = test_datagen.flow_from_directory(
         os.path.join(os.getcwd(),args.test_dir),
     	target_size=(input_image_size,input_image_size),
@@ -108,9 +120,8 @@ def main(args=None):
     	class_mode="categorical")
 
     # build network
-    scope = "new_layers"
-    y = build_model(embeddings,scope=scope)
-    trainable_param = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES,scope=scope)
+    y = build_model(embeddings,scope=new_network_scope)
+    trainable_param = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES,scope=new_network_scope)
     update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
     # print(trainable_param)
 
@@ -118,11 +129,10 @@ def main(args=None):
     loss = tf.reduce_mean(binary_crossentropy(y,labels))
 
     with tf.control_dependencies(update_ops):
-        train_op = tf.train.AdamOptimizer(0.001,name="fine_tune_adam").minimize(
-            loss,var_list=trainable_param)
+        train_op = tf.train.AdamOptimizer(0.001,name="finetune_adam").minimize(loss,
+            var_list=trainable_param)
 
-    # pdb.set_trace()
-    # only trainable params need initialized
+    # only trainable params need being initialized
     init_param = get_uninitialized_variables(sess)
     init = tf.variables_initializer(init_param)
     sess.run(init)
@@ -137,9 +147,52 @@ def main(args=None):
         _,b_loss = sess.run([train_op,loss],feed_dict=feed_dict)
         if i % 10 == 0:
             y_test_pred = sess.run(y,feed_dict={images_placeholder:x_test,phase_train_placeholder:True})
-            print("epoch: {} loss: {} test_auc: {}".format(i,b_loss,metrics.roc_auc_score(y_test,y_test_pred)))
+            acc_ = (np.argmax(y_test_pred,1) == np.argmax(y_test,1)).sum() / y_test.shape[0]
+            print("epoch: {} loss: {} test auc: {}, acc: {}".format(i,b_loss,metrics.roc_auc_score(y_test,y_test_pred),acc_))
+        if i % 100 == 0:
+            save_sign_model(sess,save_model_dir=args.model_save_dir,
+                inputs= images_placeholder,
+                outputs= y,
+                graph_tags="sex_cls_model")
+            print("epoch {}, save model in {}.".format(i,args.model_save_dir))
 
-    pdb.set_trace()
+    sess.close()
+
+def save_sign_model(sess,save_model_dir,inputs,outputs,graph_tags="sex_cls_model"):
+    "refer to: https://blog.csdn.net/thriving_fcl/article/details/75213361"
+    x = inputs
+    y = outputs
+
+    if os.path.exists(save_model_dir):
+        shutil.rmtree(save_model_dir)
+
+    builder = tf.saved_model.builder.SavedModelBuilder(save_model_dir)
+
+    # x is input tensor
+    inputs = {"input_x":tf.saved_model.utils.build_tensor_info(x)}
+
+    # y is output tensor
+    outputs = {"output": tf.saved_model.utils.build_tensor_info(y)}
+
+    signature = tf.saved_model.signature_def_utils.build_signature_def(
+        inputs = inputs,
+        outputs = outputs,
+        method_name="test_signature_save_and_load",
+        )
+
+    builder.add_meta_graph_and_variables(sess,
+        tags=[graph_tags],
+        signature_def_map = {"signature":signature},
+        )
+
+    builder.save()
+
+    return 
+
+
+
+
+
 
 def get_uninitialized_variables(sess): 
     global_vars = tf.global_variables() 
