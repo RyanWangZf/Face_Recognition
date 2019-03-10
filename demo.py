@@ -1,3 +1,6 @@
+# -*- coding: utf-8 -*-
+"real-time face detection, sex classification and face verification"
+
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
@@ -6,6 +9,7 @@ from scipy import misc
 import sys
 import os
 import argparse
+import re
 import tensorflow as tf
 import numpy as np
 import facenet
@@ -15,7 +19,7 @@ from time import sleep
 import time
 import cv2
 import dlib
-
+from sklearn.metrics.pairwise import cosine_similarity
 import pdb
 
 class facesex_cls(object):
@@ -55,24 +59,89 @@ class facesex_cls(object):
 
         return x,y,phase_train
 
+class person_cls(object):
+    def __init__(self,save_model_dir,save_people_dir):
+        self.graph = tf.Graph() # construct a graph for this network
+        self.sess = tf.Session(graph=self.graph) # create new session
+        with self.graph.as_default():
+            self.x,self.phase_train,self.embeddings = self.load_model(self.sess,save_model_dir)
+        self.save_people_dir = save_people_dir
+
+    def predict(self,face):
+        face = np.expand_dims(face,axis=0)/255.
+        emb = self.sess.run(self.embeddings,
+        		feed_dict={self.x:face,self.phase_train:False})
+        # pdb.set_trace()
+        person_data_path =  os.path.join(self.save_people_dir,"emb_data")
+        person_data = np.load(os.path.join(person_data_path,os.listdir(person_data_path)[0]))
+        person_name = os.listdir(os.path.join(self.save_people_dir,"images"))
+        sim_mat = cosine_similarity(np.r_[emb,person_data])[0,1:]
+
+        # if similarity is too small, output unknown
+        if sim_mat.max() < 0.5:
+            return "Unknown"
+        else:
+            idx = np.argmax(sim_mat) 
+            return person_name[idx]
+
+    def load_model(self,sess,save_model_dir):
+        model_path = save_model_dir
+        meta_file,ckpt_file = self.get_model_filenames(model_path)
+        saver = tf.train.import_meta_graph(os.path.join(model_path,meta_file))
+        saver.restore(sess,os.path.join(model_path,ckpt_file))
+        image_size = 160
+        # Get input and output tensors
+        images_placeholder = tf.get_default_graph().get_tensor_by_name("input:0")
+        embeddings = tf.get_default_graph().get_tensor_by_name("embeddings:0")
+        phase_train_placeholder = tf.get_default_graph().get_tensor_by_name("phase_train:0")
+        # print("embedding loaded:",embeddings)
+        return images_placeholder,phase_train_placeholder,embeddings
+
+    def get_model_filenames(self,model_dir):
+        files = os.listdir(model_dir)
+        meta_files = [s for s in files if s.endswith('.meta')]
+        if len(meta_files)==0:
+            raise ValueError('No meta file found in the model directory (%s)' % model_dir)
+        elif len(meta_files)>1:
+            raise ValueError('There should not be more than one meta file in the model directory (%s)' % model_dir)
+        meta_file = meta_files[0]
+        ckpt = tf.train.get_checkpoint_state(model_dir)
+        # pdb.set_trace()
+        if ckpt and ckpt.model_checkpoint_path:
+            ckpt_file = os.path.basename(ckpt.model_checkpoint_path)
+            return meta_file, ckpt_file
+        meta_files = [s for s in files if '.ckpt' in s]
+        max_step = -1
+        for f in files:
+            step_str = re.match(r'(^model-[\w\- ]+.ckpt-(\d+))', f)
+            if step_str is not None and len(step_str.groups())>=2:
+                step = int(step_str.groups()[1])
+                if step > max_step:
+                    max_step = step
+                    ckpt_file = step_str.groups()[0]
+        return meta_file, ckpt_file
 
 def main(args):
     print('Creating networks and loading parameters') 
     # if GPU memory is not enough, force it using CPU for computing
     os.environ["CUDA_VISIBLE_DEVICES"] = ""
-    sex_cls = facesex_cls(save_model_dir="model/sex_cls")
+
+    # load person classifier
+    p_cls = person_cls("model/20180402-114759",args.people_dir)
+
+    if args.detect_sex:
+        sex_cls = facesex_cls(save_model_dir='model/sex_cls')
 
     with tf.Graph().as_default():
         gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=args.gpu_memory_fraction)
-        sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options, log_device_placement=True,
-            allow_soft_placement=True),)
+        sess = tf.Session(config=tf.ConfigProto(gpu_options=gpu_options, log_device_placement=True,allow_soft_placement=True),)
         with sess.as_default():
             pnet, rnet, onet = detect_face.create_mtcnn(sess, None)
     
     minsize = 20 # minimum size of face
     threshold = [ 0.6, 0.7, 0.7 ]  # three steps's threshold
-    factor = 0.700 # scale factor
-    frame_interval = 3 # number of frames afer which to run face detection
+    factor = 0.709 # scale factor
+    frame_interval = args.frame_interval # number of frames afer which to run face detection
     fps_display_interval = 3 # seconds
 
     # read images
@@ -119,26 +188,30 @@ def main(args):
             rgb_img = cv2.cvtColor(frame,cv2.COLOR_BGR2RGB)
             
             for i,face_box in enumerate(det_arr):
-
-                
                 # save aligned face image
                 det = dlib.rectangle(*face_box.astype(int))
                 pts = pts_arr[i]
                 face = sp(gray_frame,det)
                 landmarks = np.matrix([[p.x,p.y] for p in face.parts()])
 
-                
                 # save and detect aligned images
                 face = dlib.get_face_chip(rgb_img,face,size=160)
 
+                # find person
+                person_name = p_cls.predict(face)
+                
+                # print("[warning] cannot find person classifier.")
+                # person_name = "face"
+
                 # do face sex classification
-                sex_label = sex_cls.predict(face)
+                if args.detect_sex:
+                    sex_label = sex_cls.predict(face)
+                    add_overlays(frame,face_box,sex_label,person_name)
+                else:
+                    add_overlays(frame,face_box,1,person_name)
 
                 # face = cv2.cvtColor(face,cv2.COLOR_RGB2BGR)
                 # cv2.imwrite("face_img_aligned/%d_img.png"%nrof_aligned_face,face)
-
-                # add overlays
-                add_overlays(frame,face_box,sex_label)
 
                 # put circles on points
                 for idx,point in enumerate(landmarks):
@@ -146,32 +219,39 @@ def main(args):
                     cv2.circle(frame,pos,4,color=(255,0,255))
                     cv2.putText(frame,str(idx + 1), pos,cv2.FONT_HERSHEY_SIMPLEX,0.4, 
                         (0, 255, 255),1, cv2.LINE_AA) 
-
                 # other put Texts
                 cv2.putText(frame,"num of faces:"+str(len(det_arr)),(10,60),
                     cv2.FONT_HERSHEY_SIMPLEX,1,(0,0,255),thickness=2,lineType=2)
                 cv2.putText(frame,str(frame_rate)+"fps",(10,30),
                     cv2.FONT_HERSHEY_SIMPLEX,1,(0,0,255),thickness=2,lineType=2)
-
+                
         frame_count += 1
         cv2.imshow("Video",frame)
         
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
-            
-def add_overlays(img,face_box,sex_label): 
-    face_box = face_box.astype(int)
-    print("sex_label:",sex_label)
-    if sex_label == 0:
-        cv2.putText(img,"male",(face_box[0],face_box[3]),
-                cv2.FONT_HERSHEY_SIMPLEX,0.5,(0,255,0),thickness=1,lineType=2)
-        cv2.rectangle(img,(face_box[0],face_box[1]),(face_box[2],face_box[3]),(0,97,255),2)
 
-    else:
-        cv2.putText(img,"female",(face_box[0],face_box[3]),
+    video_capture.release()
+    cv2.destroyAllWindows()
+
+
+def add_overlays(img,face_box,sex_label=-1,person_name="face"): 
+    face_box = face_box.astype(int)
+
+    if sex_label in [0,1]:
+        if sex_label == 0:
+            cv2.putText(img,person_name,(face_box[0],face_box[3]),
+                    cv2.FONT_HERSHEY_SIMPLEX,0.5,(0,255,0),thickness=1,lineType=2)
+            cv2.rectangle(img,(face_box[0],face_box[1]),(face_box[2],face_box[3]),(0,97,255),2)
+        elif sex_label == 1:
+	        cv2.putText(img,person_name,(face_box[0],face_box[3]),
+	                cv2.FONT_HERSHEY_SIMPLEX,0.5,(0,255,0),thickness=1,lineType=2)
+	        cv2.rectangle(img,(face_box[0],face_box[1]),(face_box[2],face_box[3]),(255,0,195),2)
+
+    else: # no sex classifier loaded
+        cv2.putText(img,person_name,(face_box[0],face_box[3]),
                 cv2.FONT_HERSHEY_SIMPLEX,0.5,(0,255,0),thickness=1,lineType=2)
-        cv2.rectangle(img,(face_box[0],face_box[1]),(face_box[2],face_box[3]),(255,0,195),2)
-    
+        cv2.rectangle(img,(face_box[0],face_box[1]),(face_box[2],face_box[3]),(0,255,0),2)
 
 def face_recognition(img,minsize,pnet,rnet,onet,threshold,factor,args):
     
@@ -213,12 +293,21 @@ def parse_arguments(argv):
     parser = argparse.ArgumentParser()
     parser.add_argument("input_video",type=str,help="Raw video file.")
 
+    parser.add_argument("--people_dir",type=str,
+    	help="Directory of people faces.",default="faces/people")
+
     parser.add_argument("--gpu_memory_fraction",type=float,
         help="Upper bound on the amount of GPU memory that will be used by the process.",
         default = 1.0)
     parser.add_argument("--detect_multiple_faces",type=bool,
         help="Detect and align multiple faces per image.",default=True)
 
+    parser.add_argument("--detect_sex",type=bool,
+    	help="Detect face and its sex.",default=False)
+
+    parser.add_argument("--frame_interval",type=int,
+        help="Detect face per number of frames.",default=3)
+    
     return parser.parse_args(argv)
 
 if __name__ == "__main__":

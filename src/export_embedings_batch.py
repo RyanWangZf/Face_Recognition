@@ -43,7 +43,6 @@ def get_model_filenames(model_dir):
                 ckpt_file = step_str.groups()[0]
     return meta_file, ckpt_file
 
-
 def main(args):
     # obtain embedding
     with tf.Graph().as_default():
@@ -54,34 +53,47 @@ def main(args):
             saver = tf.train.import_meta_graph(os.path.join(model_path,meta_file))
             saver.restore(tf.get_default_session(),os.path.join(model_path,ckpt_file))
             image_size = 160
+            batch_size = 1
             # Get input and output tensors
             images_placeholder = tf.get_default_graph().get_tensor_by_name("input:0")
             embeddings = tf.get_default_graph().get_tensor_by_name("embeddings:0")
             phase_train_placeholder = tf.get_default_graph().get_tensor_by_name("phase_train:0")
             print("embedding loaded:",embeddings)
             
+            # find how many images are under the input dir
+            class_files = os.listdir(args.input_dir)
+            nrof_images = 0
+            for cf in class_files:
+                nrof_images += len(os.listdir(os.path.join(args.input_dir,cf)))
+
             # image generator
             imagen = ImageDataGenerator(rescale=1./255)
             imgs = imagen.flow_from_directory(args.input_dir,
                 target_size=(image_size,image_size),
-                batch_size = args.batch_size,
+                batch_size = batch_size,
                 shuffle=False,
                 color_mode = "rgb",
-                class_mode = None,
-                classes=None,
+                class_mode = "categorical",
+                classes=class_files,
                 )
 
-
             # load images
-            for i,img in enumerate(imgs):
+            num_processed = 0
+            for i,(img,y) in enumerate(imgs):
                 # pdb.set_trace()
                 feed_dict = {images_placeholder:img,phase_train_placeholder:False}
-                res = sess.run(embeddings,feed_dict=feed_dict)
+                res= sess.run(embeddings,feed_dict=feed_dict)
                 if i == 0:
                     emb_ar = res
                 else:
                     emb_ar = np.r_[emb_ar,res]
-                print("batch",i,"get embeddings with shape",res.shape)
+                num_processed += batch_size
+                print("processed imgs:",num_processed,
+                        "get embeddings with shape",res.shape)
+                if num_processed >= nrof_images:
+                    print("processed Done!")
+                    break
+
 
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
@@ -96,11 +108,8 @@ def parse_arguments(argv):
     parser.add_argument("input_dir",type=str,
             help="input images directory.")
     parser.add_argument("--output_dir",type=str,
-            default="./data",
+            default="faces/people/emb_data",
             help="output image embeddings dir")
-    parser.add_argument("--batch_size",type=int,
-            default="100",
-            help="batch size of the input images.")
 
     return parser.parse_args(argv)
 
