@@ -14,19 +14,27 @@ import numpy as np
 from scipy import misc
 
 # set params
-tf.app.flags.DEFINE_string("ckpt_path","./ckpt/facenet/20180402-114759/model-20180402-114759.ckpt-275",
+tf.app.flags.DEFINE_string("ckpt_path","ckpt/facenet/20180402-114759/model-20180402-114759.ckpt-275",
     "Path of pre-trained embedding extractor, checkpoint.")
-tf.app.flags.DEFINE_string("meta_path","./ckpt/facenet/20180402-114759/model-20180402-114759.meta",
+tf.app.flags.DEFINE_string("meta_path","ckpt/facenet/20180402-114759/model-20180402-114759.meta",
     "Path of pre-trained embedding extractor, meta graph.")
-
-tf.app.flags.DEFINE_string("load_path","./data/images")
+tf.app.flags.DEFINE_string("load_path","./data/images",
+    "Path of saved people faces")
 tf.app.flags.DEFINE_string("save_path","./data/face_emb.npy",
     "Path of saved face embeddings data.")
 
 FLAGS = tf.app.flags.FLAGS
+feed_img_size = 160
 
 def main(_):
-    files = [os.path.join(os.getcwd(),p) for p in os.listdir(FLAGS.load_path)]
+    start_time = time.time()
+    meta_path = os.path.join(os.getcwd(),FLAGS.meta_path)
+    ckpt_path = os.path.join(os.getcwd(),FLAGS.ckpt_path)
+
+    files = [os.path.join(FLAGS.load_path,p) for p in os.listdir(FLAGS.load_path)]
+    names = [f.split("/")[-1] for f in files]
+    emb_dict  = dict().fromkeys(names)
+
     with tf.Graph().as_default():
         with tf.Session() as sess:
             # load model
@@ -36,29 +44,21 @@ def main(_):
             images_plhd = tf.get_default_graph().get_tensor_by_name("input:0")
             emb_plhd = tf.get_default_graph().get_tensor_by_name("embeddings:0")
             is_train_plhd = tf.get_default_graph().get_tensor_by_name("phase_train:0")
-            img_ar = []
-            name_ar = []
             for i,file in enumerate(files):
-                print("{}/{} img: {}".format(i,len(files),file))
+                print("{}/{} img: {}".format(i+1,len(files),names[i]))
+                file = os.path.join(file,os.listdir(file)[0])
                 img = misc.imread(file,mode="RGB")
-                img_ar.append(img)
-                name = file.split("/")[-1]
-                name_ar.append(os.path.splitext(name)[0])
-            
-            # Reshape
-            img_ar = np.array(img_ar).reshape(len(img_ar),
-                img_ar[0].shape[0],img_ar[0].shape[1],3)
-            
-            # Run inference
-            feed_dict = {images_plhd:img_ar,is_train_plhd:False}
-            res = sess.run(emb_plhd,feed_dict=feed_dict)
+                if img.shape[0] != feed_img_size or img.shape[1] != feed_img_size:
+                    img = misc.imresize(img,(feed_img_size,feed_img_size),interp="bilinear")
 
+                feed_dict = {images_plhd:np.expand_dims(img,0),
+                    is_train_plhd:False}
+                img_emb = sess.run(emb_plhd,feed_dict)
+                emb_dict[names[i]] = img_emb
 
-
-
-
-
-    pass
+    # save data
+    np.save(FLAGS.save_path,emb_dict)
+    print("Convert complete in {} sec.".format(int(time.time()-start_time)))
 
 if __name__ == '__main__':
     tf.app.run()
