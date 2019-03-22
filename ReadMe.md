@@ -1,6 +1,10 @@
 # Real-time Face Detection and Verification #
 [TOC]
 
+---
+
+
+
 ![](./docs/prediction.jpg)
 
 
