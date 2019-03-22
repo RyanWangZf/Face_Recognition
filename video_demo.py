@@ -18,6 +18,7 @@ from scipy import misc
 
 from utils import detect_face
 import mtcnn_detector
+import facenet_detector
 
 tf.app.flags.DEFINE_string("video_path","0",
     "Video path, if set 0, capture video from camera.")
@@ -51,9 +52,11 @@ FLAGS = tf.app.flags.FLAGS
 def main(_):
     threshold = [ 0.6, 0.7, 0.7 ]  # three steps's threshold
 
-    if FLAGS.video_path == "0":
+    if FLAGS.video_path in ["0","1"]:
         video_path = int(FLAGS.video_path)
-        print("Capture video from camera.")
+        print("Capture video from camera {}.".format(video_path))
+    else:
+        video_path = FLAGS.video_path
 
     with tf.Graph().as_default():
         gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=
@@ -64,7 +67,6 @@ def main(_):
                             allow_soft_placement=True),)
         with sess.as_default():
             pnet,rnet,onet = detect_face.create_mtcnn(sess,"./ckpt/mtcnn")
-
 
         video_capture = cv2.VideoCapture(video_path)
         f_count = 0
@@ -101,6 +103,7 @@ def main(_):
                     # BGR2RGB
                     face = cv2.cvtColor(face,cv2.COLOR_BGR2RGB)
                     # TODO (face verification)
+                    facenet_detector.face_verify(face)
 
                 print("number of faces: {} scores: {}".format(len(det_arr),scores_arr))
 
