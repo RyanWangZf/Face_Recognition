@@ -22,12 +22,17 @@ import facenet_detector
 
 tf.app.flags.DEFINE_string("video_path","0",
     "Video path, if set 0, capture video from camera.")
+tf.app.flags.DEFINE_string("emb_path","./data/face_emb.npy",
+    "Saved faces embeddings path.")
+
 tf.app.flags.DEFINE_string("video_resolution","800*600",
     "Resolution of the video frame, format as `xxx*xxx`")
 tf.app.flags.DEFINE_integer("face_size",200,
     "Aligned face image shape.")
 tf.app.flags.DEFINE_float("face_threshold",0.9,
     "A threshold to decide if draw box or not via output scores.")
+tf.app.flags.DEFINE_float("match_threshold",0.5,
+    "A threshold to decide if one exists in stored face embeddings.")
 
 tf.app.flags.DEFINE_boolean("with_gpu",False,
     "Set as `True` will make use of GPU for detection.")
@@ -38,7 +43,7 @@ tf.app.flags.DEFINE_boolean("detect_multiple_faces",True,
 
 tf.app.flags.DEFINE_float("gpu_memory_fraction",0.1,
     "Upper bound on the amount of GPU memory that will be used by the process.")
-tf.app.flags.DEFINE_integer("frame_interval",3,
+tf.app.flags.DEFINE_integer("frame_interval",2,
     "Doing detection per number of frames")
 tf.app.flags.DEFINE_integer("minsize_face",20,
     "Minimum size of face.")
@@ -50,7 +55,21 @@ tf.app.flags.DEFINE_integer("margin",44,
 FLAGS = tf.app.flags.FLAGS
 
 def main(_):
+    
+    # force use of CPU
+    if FLAGS.with_gpu == False:
+        os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
     threshold = [ 0.6, 0.7, 0.7 ]  # three steps's threshold
+    emb_path = FLAGS.emb_path
+    try:
+        emb_dict = np.load(emb_path).item()
+    except:
+        print("Cannot load embeddings data from {} !".format(emb_path))
+        
+    # load face verification model
+    facenet_ = facenet_detector.facenet_detector()
+    name_ar,emb_ar = facenet_detector.get_names_emb_from_dict(emb_dict)
 
     if FLAGS.video_path in ["0","1"]:
         video_path = int(FLAGS.video_path)
@@ -71,6 +90,7 @@ def main(_):
         video_capture = cv2.VideoCapture(video_path)
         f_count = 0
         f_rate = 0
+        det_arr = []
         start_time = time.time()
         while True:
             # capture frame by frame
@@ -93,32 +113,37 @@ def main(_):
                     f_rate = int(f_count/(end_time-start_time))
                     start_time = time.time()
                     f_count = 0
+            
                 # detect face
                 det_arr,pts_arr,scores_arr = mtcnn_detector.face_detect(i_frame,
                                                                 pnet,rnet,onet,threshold,FLAGS)
-
-                for face_box in det_arr:
-                    # get aligned faces as input
-                    face = mtcnn_detector.align_face(o_frame,face_box,FLAGS)
-                    # BGR2RGB
-                    face = cv2.cvtColor(face,cv2.COLOR_BGR2RGB)
-                    # TODO (face verification)
-                    facenet_detector.face_verify(face)
-
-                print("number of faces: {} scores: {}".format(len(det_arr),scores_arr))
-
+                if len(det_arr) > 0:
+                    faces = []
+                    for i,det in enumerate(det_arr):
+                        # get aligned faces as input
+                        face = mtcnn_detector.align_face(o_frame,det,FLAGS)
+                        # resize, as input for pretrained Inception-ResNet-V1
+                        face = misc.imresize(face,(160,160),interp="bilinear")
+                        # BGR2RGB
+                        faces.append(cv2.cvtColor(face,cv2.COLOR_BGR2RGB))
+                    # face verification
+                    faces = np.array(faces)
+                    person_name = facenet_.face_verify(faces,name_ar,emb_ar,FLAGS.match_threshold)
+            
+            # draw boxes
             if len(det_arr) > 0:
                 for i,det in enumerate(det_arr):
-                    draw_box(o_frame,det,person_name="Unknown")
-
+                    draw_box(o_frame,det,person_name=person_name[i])
+            
             # other put Texts
+            print("number of faces: {} scores: {}".format(len(det_arr),scores_arr)) 
             cv2.putText(o_frame,"num of faces:"+str(len(det_arr)),(10,60),
                 cv2.FONT_HERSHEY_SIMPLEX,1,(0,0,255),thickness=2,lineType=2)
             cv2.putText(o_frame,str(f_rate)+"fps",(10,30),
                 cv2.FONT_HERSHEY_SIMPLEX,1,(0,0,255),thickness=2,lineType=2)
 
             f_count += 1
-            cv2.imshow("Real-time output",o_frame)
+            cv2.imshow("Real-time Output",o_frame)
 
             if cv2.waitKey(10) & 0xFF == ord("q"):
                 break
@@ -130,7 +155,7 @@ def main(_):
 def draw_box(frame,box,person_name="Unknown"):
     box = box.astype(int)
     cv2.putText(frame,person_name,(box[0],box[3]),
-                        cv2.FONT_HERSHEY_SIMPLEX,0.5,(0,255,0),thickness=1,lineType=2)
+                        cv2.FONT_HERSHEY_SIMPLEX,1,(0,255,0),1)
     cv2.rectangle(frame,(box[0],box[1]),(box[2],box[3]),(0,97,255),2)
 
 if __name__ == '__main__':

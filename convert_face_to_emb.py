@@ -51,6 +51,9 @@ def main(_):
                 if img.shape[0] != feed_img_size or img.shape[1] != feed_img_size:
                     img = misc.imresize(img,(feed_img_size,feed_img_size),interp="bilinear")
 
+                # preprocessing
+                img = img / 255.0
+                # get embeddings
                 feed_dict = {images_plhd:np.expand_dims(img,0),
                     is_train_plhd:False}
                 img_emb = sess.run(emb_plhd,feed_dict)
