@@ -1,4 +1,5 @@
 # Real-time Face Detection and Verification #
+
 [TOC]
 
 ---
@@ -36,15 +37,15 @@ Place this model file under **./ckpt/facenet/20180402-114759**
 
 The data is stored with this hierarchy
 
-> -data
+> \- data
 >
-> ​	-raw_images
+> ​	-- raw_images
 >
-> ​	-images
+> ​	-- images
 >
-> ​		-person1
+> ​		--- person1
 >
-> ​		-person2
+> ​		--- person2
 >
 > ​		...
 
