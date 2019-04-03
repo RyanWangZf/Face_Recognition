@@ -20,7 +20,7 @@ from utils import detect_face
 import mtcnn_detector
 import facenet_detector
 
-tf.app.flags.DEFINE_string("image_path","./demo/1.jpg",
+tf.app.flags.DEFINE_string("image_path","./demo/party.jpg",
     "Video path, if set 0, capture video from camera.")
 tf.app.flags.DEFINE_string("emb_path","./data/face_emb.npy",
     "Saved faces embeddings path.")
@@ -37,7 +37,7 @@ tf.app.flags.DEFINE_boolean("with_gpu",False,
 tf.app.flags.DEFINE_boolean("detect_multiple_faces",True,
     "Set as `False` will only detect one face one frame.")
 
-tf.app.flags.DEFINE_float("gpu_memory_fraction",0.1,
+tf.app.flags.DEFINE_float("gpu_memory_fraction",0.5,
     "Upper bound on the amount of GPU memory that will be used by the process.")
 tf.app.flags.DEFINE_integer("minsize_face",20,
     "Minimum size of face.")
@@ -74,7 +74,7 @@ def main(_):
                             allow_soft_placement=True),)
         pnet,rnet,onet = detect_face.create_mtcnn(sess,"./ckpt/mtcnn")
 
-        # read image
+        # read image, RGB mode
         frame = misc.imread(FLAGS.image_path)
         start_time = time.time()
             
